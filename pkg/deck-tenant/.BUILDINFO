@@ -1,11 +1,11 @@
 format = 2
 pkgname = deck-tenant
 pkgbase = deck-tenant
-pkgver = 0.1.0-5
+pkgver = 0.2.0-1
 pkgarch = any
-pkgbuild_sha256sum = a007413b89fa56c8169b34f88ecc9ee60ff3ed4243a02c9951a3c9d75ac0c8fe
+pkgbuild_sha256sum = 0dd71805a2b3a7ba5021aa94d316b326e403b4c2b78d28af1a593b50a340b5fe
 packager = Unknown Packager
-builddate = 1783009049
+builddate = 1783011874
 builddir = /home/deck/Projects/deck-tenant
 startdir = /home/deck/Projects/deck-tenant
 buildtool = makepkg

@@ -3,12 +3,12 @@
 pkgname = deck-tenant
 pkgbase = deck-tenant
 xdata = pkgtype=pkg
-pkgver = 0.1.0-5
+pkgver = 0.2.0-1
 pkgdesc = Per-Steam-account virtual homes for non-Steam apps on Steam Deck
 url = https://github.com/MasonRhodesDev/deck-tenant
-builddate = 1783009049
+builddate = 1783011874
 packager = Unknown Packager
-size = 24518
+size = 27620
 arch = any
 license = MIT
 optdepend = bash

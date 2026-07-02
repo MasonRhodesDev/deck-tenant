@@ -1,19 +1,24 @@
 #!/bin/bash
-# deck-tenant-guard — align registered apps' lifetimes with Steam tenancy.
+# deck-tenant-guard — event-driven alignment of app lifetimes with Steam tenancy.
 #
-#  - Steam exits inside game mode (gamescope session) -> close registered apps:
-#    the session is over and the next profile must not inherit them.
-#  - The active Steam account changes while an app runs (desktop re-login)
-#    -> close it and reopen it under the new tenant.
-#  - Steam exits in desktop mode -> leave apps alone (same person).
+# No polling. The packaged systemd units deliver the events:
+#   deck-tenant-login.path      loginusers.vdf modified  -> handle-login
+#   deck-tenant-steamwatch.path steam.pid (re)written    -> watch-steam
 #
-# Needed because flatpak apps run in their own systemd scopes and survive
-# Steam, the session, and profile switches on their own.
+#   handle-login   oneshot: if the active Steam account changed, close other
+#                  tenants' tracked processes and restart registered apps that
+#                  were running, now under the new tenant
+#   watch-steam    block on a pidfd until the running Steam exits (kernel
+#                  event, zero CPU), then handle the session boundary:
+#                  gamescope session -> close all tenant-owned processes;
+#                  desktop session   -> leave everything alone (same person)
 set -u
 
-POLL=${DECK_TENANT_GUARD_POLL:-5}
+STATE_ROOT="${DECK_TENANT_ROOT:-$HOME/.local/share/deck-tenant}"
 CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/deck-tenant"
 APPS_TSV="$CONF_DIR/apps.tsv"
+RUN_DIR="$STATE_ROOT/running"
+LAST="$STATE_ROOT/last-tenant"
 DRYRUN=${DECK_TENANT_GUARD_DRYRUN:-}
 
 # resolve the sibling CLI absolutely — systemd services don't have the
@@ -24,10 +29,11 @@ log() { echo "$*"; }
 act() { if [ -n "$DRYRUN" ]; then echo "DRYRUN: $*"; else "$@"; fi; }
 
 app_running() { flatpak ps --columns=application 2>/dev/null | grep -qx "$1"; }
-steam_running() { pgrep -x steam >/dev/null 2>&1; }
 
 registered() { [ -f "$APPS_TSV" ] && cut -f1,3 "$APPS_TSV"; }
 
+# Desktop of the active seat session: "gamescope" in game mode, "KDE" (etc.)
+# in desktop mode, empty during transitions.
 active_desktop() {
     local s d a
     for s in $(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}'); do
@@ -36,8 +42,6 @@ active_desktop() {
         if [ "$a" = "yes" ] && [ -n "$d" ]; then echo "$d"; return; fi
     done
 }
-
-RUN_DIR="${DECK_TENANT_ROOT:-$HOME/.local/share/deck-tenant}/running"
 
 # Kill precisely by tracked ownership: flatpak instances via their run records
 # (written by `deck-tenant _track`), non-flatpak launches via their
@@ -96,32 +100,48 @@ restart_registered_running() {
     done
 }
 
-last_uid=$("$DT" active)
-steam_was=""
-steam_running && steam_was=1
-
-while true; do
+cmd_handle_login() {
+    mkdir -p "$STATE_ROOT"
+    local uid last
     uid=$("$DT" active)
-    if [ -n "$uid" ] && [ "$uid" != "$last_uid" ]; then
-        log "steam account changed ($last_uid -> $uid)"
+    last=$(cat "$LAST" 2>/dev/null || echo "")
+    if [ -n "$last" ] && [ -n "$uid" ] && [ "$uid" != "$last" ]; then
+        log "steam account changed ($last -> $uid)"
         restart_registered_running "$uid"
     fi
-    last_uid=$uid
+    printf '%s\n' "$uid" > "$LAST"
+}
 
-    if steam_running; then
-        steam_was=1
-    elif [ -n "$steam_was" ]; then
-        steam_was=""
-        d=$(active_desktop)
-        case "$d" in
-            gamescope|"")
-                log "steam exited (session: ${d:-none}) — closing registered apps"
-                kill_registered
-                ;;
-            *)
-                log "steam exited in desktop session ($d) — leaving apps running"
-                ;;
-        esac
+cmd_watch_steam() {
+    local pid="${DECK_TENANT_STEAM_PID:-}"
+    if [ -z "$pid" ]; then
+        pid=$(cat "$HOME/.steam/steam.pid" 2>/dev/null) || exit 0
     fi
-    sleep "$POLL"
-done
+    kill -0 "$pid" 2>/dev/null || exit 0
+    log "watching steam (pid $pid) via pidfd"
+    python3 - "$pid" <<'PY'
+import os, select, sys
+try:
+    fd = os.pidfd_open(int(sys.argv[1]))
+except OSError:
+    sys.exit(0)          # raced: already gone
+select.select([fd], [], [])   # kernel wakes us exactly when the process exits
+PY
+    local d
+    d=$(active_desktop)
+    case "$d" in
+        gamescope|"")
+            log "steam exited (session: ${d:-none}) — closing tenant-owned apps"
+            kill_registered
+            ;;
+        *)
+            log "steam exited in desktop session ($d) — leaving apps running"
+            ;;
+    esac
+}
+
+case "${1:-}" in
+    handle-login) cmd_handle_login ;;
+    watch-steam)  cmd_watch_steam ;;
+    *) echo "usage: deck-tenant-guard <handle-login|watch-steam> (driven by systemd path units)" >&2; exit 2 ;;
+esac

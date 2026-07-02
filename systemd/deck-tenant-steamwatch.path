@@ -1,0 +1,8 @@
+[Unit]
+Description=deck-tenant: re-arm the Steam exit watcher when Steam starts
+
+[Path]
+PathModified=%h/.steam/steam.pid
+
+[Install]
+WantedBy=default.target

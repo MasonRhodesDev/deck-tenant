@@ -1,0 +1,8 @@
+[Unit]
+Description=deck-tenant: watch for Steam account changes
+
+[Path]
+PathModified=%h/.steam/steam/config/loginusers.vdf
+
+[Install]
+WantedBy=default.target

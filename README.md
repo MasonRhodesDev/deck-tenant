@@ -43,8 +43,11 @@ unshare -r pacman --root $ROOT --dbpath $ROOT/var/lib/pacman     -U --noconfirm 
 
 # one-time environment: PATH + the guard unit
 echo 'export PATH="$HOME/.local/share/deck-pkgs/usr/bin:$PATH"' >> ~/.bashrc
-systemctl --user link $ROOT/usr/lib/systemd/user/deck-tenant-guard.service
-systemctl --user enable --now deck-tenant-guard
+for u in deck-tenant-login.path deck-tenant-login.service \
+         deck-tenant-steamwatch.path deck-tenant-steamwatch.service; do
+    systemctl --user link $ROOT/usr/lib/systemd/user/$u; done
+systemctl --user enable --now deck-tenant-login.path \
+    deck-tenant-steamwatch.path deck-tenant-steamwatch.service
 
 # uninstall
 unshare -r pacman --root $ROOT --dbpath $ROOT/var/lib/pacman -R deck-tenant
@@ -75,11 +78,13 @@ deck-tenant ps
   are recorded (instance-id → tenant) by `deck-tenant _track`; non-flatpak
   commands run in tenant-named systemd scopes (cgroup-tracked). `deck-tenant
   ps` lists them; the guard kills precisely by owner.
-- **`deck-tenant-guard`** (systemd user service) — flatpaks survive Steam and
-  session switches in their own scopes, so the guard closes tenant-owned
-  processes when a game-mode (gamescope) session ends, restarts registered
-  apps under the new tenant when the active Steam account changes, and leaves
-  everything alone when Steam merely exits in desktop mode.
+- **`deck-tenant-guard`** — fully event-driven, no daemon and no polling:
+  a systemd path unit on `loginusers.vdf` delivers account changes
+  (`handle-login`), and a path unit on `steam.pid` re-arms a watcher that
+  blocks on a **pidfd** until Steam exits (`watch-steam` — kernel event, zero
+  CPU). Gamescope session end closes all tenant-owned processes; an account
+  change closes other tenants' processes and restarts registered apps under
+  the new tenant; a desktop-mode Steam exit leaves everything alone.
 - **`deck-tenant-steam-sync`** — byte-exact `shortcuts.vdf` editor: rewires
   direct-launch entries to the tenant wrapper (preserving appids/artwork) and
   creates missing ones so every profile can launch — and first-time
