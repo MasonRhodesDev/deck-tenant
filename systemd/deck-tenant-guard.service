@@ -1,0 +1,11 @@
+[Unit]
+Description=deck-tenant: close/reopen registered apps on Steam session and account boundaries
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/deck-tenant-guard
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target

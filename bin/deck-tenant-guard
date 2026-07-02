@@ -1,0 +1,89 @@
+#!/bin/bash
+# deck-tenant-guard — align registered apps' lifetimes with Steam tenancy.
+#
+#  - Steam exits inside game mode (gamescope session) -> close registered apps:
+#    the session is over and the next profile must not inherit them.
+#  - The active Steam account changes while an app runs (desktop re-login)
+#    -> close it and reopen it under the new tenant.
+#  - Steam exits in desktop mode -> leave apps alone (same person).
+#
+# Needed because flatpak apps run in their own systemd scopes and survive
+# Steam, the session, and profile switches on their own.
+set -u
+
+POLL=${DECK_TENANT_GUARD_POLL:-5}
+CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/deck-tenant"
+APPS_TSV="$CONF_DIR/apps.tsv"
+DRYRUN=${DECK_TENANT_GUARD_DRYRUN:-}
+
+log() { echo "$*"; }
+act() { if [ -n "$DRYRUN" ]; then echo "DRYRUN: $*"; else "$@"; fi; }
+
+app_running() { pgrep -f "app/$1" >/dev/null 2>&1; }
+steam_running() { pgrep -x steam >/dev/null 2>&1; }
+
+registered() { [ -f "$APPS_TSV" ] && cut -f1,3 "$APPS_TSV"; }
+
+active_desktop() {
+    local s d a
+    for s in $(loginctl list-sessions --no-legend 2>/dev/null | awk '{print $1}'); do
+        a=$(loginctl show-session "$s" -p Active --value 2>/dev/null)
+        d=$(loginctl show-session "$s" -p Desktop --value 2>/dev/null)
+        if [ "$a" = "yes" ] && [ -n "$d" ]; then echo "$d"; return; fi
+    done
+}
+
+kill_registered() {
+    local app_id wrapper
+    while IFS=$'\t' read -r app_id wrapper; do
+        [ -n "$app_id" ] || continue
+        if app_running "$app_id"; then
+            log "closing $app_id"
+            act flatpak kill "$app_id"
+        fi
+    done < <(registered)
+}
+
+restart_registered_running() {
+    local app_id wrapper
+    while IFS=$'\t' read -r app_id wrapper; do
+        [ -n "$app_id" ] || continue
+        if app_running "$app_id"; then
+            log "restarting $app_id for the new tenant"
+            act flatpak kill "$app_id"
+            for _ in $(seq 1 20); do app_running "$app_id" || break; sleep 0.5; done
+            # systemd-run: the app must not be a child of this guard
+            act systemd-run --user --collect "$wrapper"
+        fi
+    done < <(registered)
+}
+
+last_uid=$(deck-tenant active)
+steam_was=""
+steam_running && steam_was=1
+
+while true; do
+    uid=$(deck-tenant active)
+    if [ -n "$uid" ] && [ "$uid" != "$last_uid" ]; then
+        log "steam account changed ($last_uid -> $uid)"
+        restart_registered_running
+    fi
+    last_uid=$uid
+
+    if steam_running; then
+        steam_was=1
+    elif [ -n "$steam_was" ]; then
+        steam_was=""
+        d=$(active_desktop)
+        case "$d" in
+            gamescope|"")
+                log "steam exited (session: ${d:-none}) — closing registered apps"
+                kill_registered
+                ;;
+            *)
+                log "steam exited in desktop session ($d) — leaving apps running"
+                ;;
+        esac
+    fi
+    sleep "$POLL"
+done
