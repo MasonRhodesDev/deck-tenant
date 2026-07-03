@@ -1,0 +1,37 @@
+# Maintainer: Mason Rhodes <mrhodesdev@gmail.com>
+#
+# Arch package for deck-tenant. SteamOS is Arch-based, so this is the single
+# packaging target — no RPM spec / COPR on purpose.
+#
+# Version source of truth: pkgver below. There is no Cargo.toml here, so the
+# CI version gate only checks release tag == pkgver.
+#
+# CI drops a git-archive snapshot named exactly $pkgname-$pkgver.tar.gz next
+# to this file, so makepkg never downloads on PR builds.
+
+pkgname=deck-tenant
+pkgver=0.2.0
+pkgrel=1
+pkgdesc="Per-Steam-account virtual homes for non-Steam apps on Steam Deck"
+arch=(any)
+url="https://github.com/MasonRhodesDev/deck-tenant"
+license=(MIT)
+install="$pkgname.install"
+depends=(bash python)
+optdepends=('flatpak: per-tenant flatpak app registration (host-provided on SteamOS)')
+source=("$pkgname-$pkgver.tar.gz::https://github.com/MasonRhodesDev/deck-tenant/archive/v$pkgver.tar.gz")
+sha256sums=('SKIP') # pin on release: updpkgsums
+
+package() {
+    cd "$srcdir/$pkgname-$pkgver"
+    install -Dm755 bin/deck-tenant            "$pkgdir/usr/bin/deck-tenant"
+    install -Dm755 bin/deck-tenant-guard      "$pkgdir/usr/bin/deck-tenant-guard"
+    install -Dm755 bin/deck-tenant-steam-sync "$pkgdir/usr/bin/deck-tenant-steam-sync"
+    local u
+    for u in deck-tenant-login.path deck-tenant-login.service \
+             deck-tenant-steamwatch.path deck-tenant-steamwatch.service; do
+        install -Dm644 "dist/$u" "$pkgdir/usr/lib/systemd/user/$u"
+    done
+    install -Dm644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+    install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

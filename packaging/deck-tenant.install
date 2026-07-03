@@ -1,0 +1,14 @@
+# The guard units are user units under /usr/lib/systemd/user and are never
+# auto-enabled (and pacman scriptlets run as root, so `systemctl --user` is
+# unavailable here). `deck-tenant setup` does the per-user wiring: PATH
+# snippet (user-level pacman root only), unit link/enable, and — when
+# installed into ~/.local/share/deck-pkgs — ExecStart drop-in overrides
+# pointing at the actual binary location.
+
+post_install() {
+    echo ':: deck-tenant: run `deck-tenant setup` as your user to enable the guard units'
+}
+
+post_upgrade() {
+    echo ':: deck-tenant: run `deck-tenant setup` again if unit files changed'
+}

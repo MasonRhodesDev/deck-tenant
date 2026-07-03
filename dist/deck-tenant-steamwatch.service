@@ -3,7 +3,7 @@ Description=deck-tenant: await Steam exit (pidfd) and handle the session boundar
 
 [Service]
 Type=simple
-ExecStart=%h/.local/share/deck-pkgs/usr/bin/deck-tenant-guard watch-steam
+ExecStart=/usr/bin/deck-tenant-guard watch-steam
 
 [Install]
 WantedBy=default.target

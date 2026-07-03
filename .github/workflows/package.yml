@@ -1,0 +1,17 @@
+name: Package
+
+# Arch only: SteamOS is Arch-based, so there is no RPM/COPR target for this
+# repo (deliberate deviation from the usual two-job caller).
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: package-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  arch:
+    uses: MasonRhodesDev/packaging-workflows/.github/workflows/arch-package.yml@main

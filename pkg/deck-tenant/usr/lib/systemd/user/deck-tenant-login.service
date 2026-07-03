@@ -1,6 +1,0 @@
-[Unit]
-Description=deck-tenant: handle a Steam account change
-
-[Service]
-Type=oneshot
-ExecStart=%h/.local/share/deck-pkgs/usr/bin/deck-tenant-guard handle-login
