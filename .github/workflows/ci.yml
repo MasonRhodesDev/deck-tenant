@@ -1,0 +1,30 @@
+name: CI
+
+# Repo-local (not the shared rust-ci caller): deck-tenant is Bash + Python,
+# so CI is shellcheck + a Python syntax check in an Arch container.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: shellcheck + py_compile
+    runs-on: ubuntu-latest
+    container: archlinux:latest
+    steps:
+      - name: Install tooling
+        run: pacman -Syu --noconfirm --needed git shellcheck python
+
+      - uses: actions/checkout@v4
+
+      - name: shellcheck
+        run: shellcheck bin/deck-tenant bin/deck-tenant-guard
+
+      - name: Python syntax check
+        run: python -m py_compile bin/deck-tenant-steam-sync

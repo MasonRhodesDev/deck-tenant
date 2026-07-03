@@ -1,0 +1,16 @@
+name: Release
+
+# No COPR for this repo (SteamOS is Arch-based); the reusable workflow's copr
+# job self-skips when COPR_WEBHOOK_URL is not configured.
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    uses: MasonRhodesDev/packaging-workflows/.github/workflows/release.yml@main
+    secrets: inherit
