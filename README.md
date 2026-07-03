@@ -22,35 +22,59 @@ application that *defines* the active tenant (`loginusers.vdf` `MostRecent`),
 so its dirs are symlinked into every virtual home and `deck-tenant run steam`
 is an error.
 
-## Install (proper packages — no installer scripts)
+## Install
 
-Built as an Arch package and installed into a user-level pacman root
-(`~/.local/share/deck-pkgs`) — no sudo, survives SteamOS updates, and pacman
-gives real install/upgrade/uninstall with file tracking:
+Prebuilt packages come from the [`[mason]` pacman
+repo](https://github.com/MasonRhodesDev/arch-repo). SteamOS is Arch-based, so
+the Arch package is the **only** packaging target — there is deliberately no
+RPM spec / COPR for this repo.
+
+### Steam Deck / SteamOS (user-level pacman root, no sudo)
+
+SteamOS's root filesystem is read-only and wiped on updates, so install into
+a user-level pacman root (`~/.local/share/deck-pkgs`) — survives SteamOS
+updates, and pacman gives real install/upgrade/uninstall with file tracking:
 
 ```sh
-# one-time: an Arch container for packaging (SteamOS ships distrobox)
-distrobox create --image docker.io/library/archlinux:latest --name packager --yes
-distrobox enter packager -- sudo pacman -Sy --noconfirm --needed base-devel
+# one-time: a pacman config pointing at the [mason] repo and the user root
+ROOT=~/.local/share/deck-pkgs
+mkdir -p $ROOT/var/lib/pacman $ROOT/var/cache/pacman/pkg ~/.config/deck-pkgs
+cat > ~/.config/deck-pkgs/pacman.conf <<EOF
+[options]
+Architecture = auto
+CacheDir = $ROOT/var/cache/pacman/pkg
 
-# build
-git clone https://github.com/MasonRhodesDev/deck-tenant.git && cd deck-tenant
-distrobox enter packager -- makepkg -fd
+[mason]
+SigLevel = Optional TrustAll
+Server = https://masonrhodesdev.github.io/arch-repo/x86_64
+EOF
 
 # install / upgrade (same command; pacman needs euid 0 → rootless userns)
-ROOT=~/.local/share/deck-pkgs; mkdir -p $ROOT/var/lib/pacman
-unshare -r pacman --root $ROOT --dbpath $ROOT/var/lib/pacman     -U --noconfirm deck-tenant-*.pkg.tar.zst
+unshare -r pacman --config ~/.config/deck-pkgs/pacman.conf \
+    --root $ROOT --dbpath $ROOT/var/lib/pacman -Sy deck-tenant
 
-# one-time environment: PATH + the guard unit
-echo 'export PATH="$HOME/.local/share/deck-pkgs/usr/bin:$PATH"' >> ~/.bashrc
-for u in deck-tenant-login.path deck-tenant-login.service \
-         deck-tenant-steamwatch.path deck-tenant-steamwatch.service; do
-    systemctl --user link $ROOT/usr/lib/systemd/user/$u; done
-systemctl --user enable --now deck-tenant-login.path \
-    deck-tenant-steamwatch.path deck-tenant-steamwatch.service
+# one-time per-user wiring: PATH snippet, guard units linked+enabled, and
+# ExecStart drop-in overrides pointing the canonical units at this root
+$ROOT/usr/bin/deck-tenant setup
 
 # uninstall
-unshare -r pacman --root $ROOT --dbpath $ROOT/var/lib/pacman -R deck-tenant
+unshare -r pacman --config ~/.config/deck-pkgs/pacman.conf \
+    --root $ROOT --dbpath $ROOT/var/lib/pacman -R deck-tenant
+```
+
+### Arch Linux (regular system install)
+
+Add the repo to `/etc/pacman.conf`:
+
+```ini
+[mason]
+SigLevel = Optional TrustAll
+Server = https://masonrhodesdev.github.io/arch-repo/x86_64
+```
+
+```sh
+sudo pacman -Sy deck-tenant
+deck-tenant setup   # enables the per-user guard units
 ```
 
 ## Use
