@@ -211,8 +211,7 @@ cmd__track() {
     local pid=$!
     local run_dir="$STATE_ROOT/running" inst=""
     mkdir -p "$run_dir"
-    local i
-    for i in $(seq 1 30); do
+    for _ in $(seq 1 30); do
         inst=$(flatpak ps --columns=instance,application 2>/dev/null | awk -v a="$app_id" '$2==a {print $1; exit}')
         [ -n "$inst" ] && break
         kill -0 "$pid" 2>/dev/null || break
