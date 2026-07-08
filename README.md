@@ -95,6 +95,52 @@ deck-tenant ps
 
 ## Pieces
 
+Everything hangs off two Steam-owned files — no daemon, just path units:
+
+```mermaid
+flowchart TD
+    subgraph steamfiles["Steam-owned files (Steam defines the tenant, is never one)"]
+        login["~/.steam/steam/config/loginusers.vdf<br/>MostRecent = active tenant"]
+        pidfile["~/.steam/steam.pid"]
+    end
+
+    subgraph units["systemd user path units"]
+        lpath["deck-tenant-login.path"]
+        spath["deck-tenant-steamwatch.path"]
+    end
+
+    subgraph guard["deck-tenant-guard"]
+        handlelogin["handle-login (oneshot)"]
+        watchsteam["watch-steam<br/>blocks on pidfd until Steam exits"]
+    end
+
+    subgraph state["~/.local/share/deck-tenant"]
+        homes["homes/&lt;accountid&gt; — virtual homes"]
+        procs["running/ — instance-id / scope → owning tenant"]
+        last["last-tenant"]
+    end
+
+    subgraph launch["launch paths"]
+        wrapper["registered flatpak wrapper:<br/>symlink-swap ~/.var/app/&lt;id&gt; into tenant home,<br/>then flatpak run under _track"]
+        runcmd["deck-tenant run — systemd-run --user --scope"]
+    end
+
+    realhome["real ~ — theming dirs, fonts, Steam's own dirs"]
+
+    login -- "PathModified" --> lpath
+    pidfile -- "PathModified" --> spath
+    lpath --> handlelogin
+    spath -- "re-arms" --> watchsteam
+    handlelogin -- "compare + update to detect account change" --> last
+    handlelogin -- "account change: close other tenants' tracked processes,<br/>restart registered apps under new tenant" --> procs
+    watchsteam -- "gamescope session end: close tenant processes<br/>(desktop-mode exit: no-op)" --> procs
+    login -. "deck-tenant active → selects homes/&lt;accountid&gt;" .-> homes
+    wrapper --> homes
+    wrapper -- "_track: instance-id → tenant" --> procs
+    runcmd -- "tenant-named scope (cgroup-tracked)" --> procs
+    homes -- "shared via symlinks, never forked" --> realhome
+```
+
 - **`deck-tenant`** — tenant detection (`active`), virtual-home provisioning
   (`home`; seeds symlinks to shared theming, media dirs, and Steam),
   `run`, `register`, `list`.
