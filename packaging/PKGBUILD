@@ -10,9 +10,9 @@
 # to this file, so makepkg never downloads on PR builds.
 
 pkgname=deck-tenant
-pkgver=0.2.0
+pkgver=0.3.0
 pkgrel=1
-pkgdesc="Per-Steam-account virtual homes for non-Steam apps on Steam Deck"
+pkgdesc="Per-app, per-Steam-account data isolation for non-Steam apps on Steam Deck"
 arch=(any)
 url="https://github.com/MasonRhodesDev/deck-tenant"
 license=(MIT)
