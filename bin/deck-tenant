@@ -1,23 +1,28 @@
 #!/bin/bash
-# deck-tenant — per-Steam-account virtual homes on a shared-user device.
+# deck-tenant — per-app, per-Steam-account data isolation on a shared-user device.
 #
 # SteamOS runs every Steam profile as the one `deck` Linux user, so non-Steam
-# apps (Discord, Kodi, browsers, …) share logins and state. deck-tenant gives
-# each Steam account a virtual home and launches apps inside it: flatpak and
-# XDG apps resolve $HOME from the environment, so everything an app persists
-# lands in the tenant's home — no per-app path knowledge required.
+# apps (Discord, browsers, …) share logins and state. deck-tenant isolates
+# exactly the apps that need it: a registered flatpak app has its whole
+# ~/.var/app/<id> dir symlink-swapped to the active Steam account's copy.
+# Shared is the default — register only apps whose per-account state matters
+# (logins, DMs), and mark subpaths of the app dir that must stay canonical
+# across accounts (mods, game instances) with --shared.
 #
 # Session plumbing (D-Bus, Wayland, PipeWire, portals) lives in
-# $XDG_RUNTIME_DIR and is independent of $HOME, so apps keep display, audio,
-# and keyring access. The desktop session itself is never touched.
+# $XDG_RUNTIME_DIR and is untouched, so apps keep display, audio, and
+# keyring access. The desktop session itself is never touched.
 #
 # Commands:
 #   deck-tenant active                    print active Steam account id (or 'default')
-#   deck-tenant home                      print (and provision) the tenant home
-#   deck-tenant run [--] <cmd> [args…]    run a command inside the tenant home
-#   deck-tenant register --app-id <flatpak-id> --name <Name> [--flags-file <path>]
-#                                         make a flatpak app multi-tenant:
-#                                         wrapper, desktop shadow, guard entry
+#   deck-tenant home [id]                 print the tenant state dir
+#   deck-tenant register --app-id <flatpak-id> --name <Name>
+#                 [--flags-file <path>] [--shared <rel>]…
+#                                         make a flatpak app per-account:
+#                                         wrapper, desktop shadow, guard entry.
+#                                         --shared (repeatable) marks a subpath
+#                                         of the app dir that stays canonical —
+#                                         one copy for every account
 #   deck-tenant unregister <flatpak-id>   undo register (tenant data is kept)
 #   deck-tenant list                      list registered apps
 #   deck-tenant ps                        running processes with tenant owners
@@ -31,16 +36,6 @@ CONF_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/deck-tenant"
 APPS_TSV="$CONF_DIR/apps.tsv"
 LOGINUSERS="${DECK_TENANT_LOGINUSERS:-$HOME/.steam/steam/config/loginusers.vdf}"
 
-# Configs shared across tenants so apps keep the device's look and feel.
-# Steam's own dirs are DELIBERATELY shared: Steam is the driving application
-# for tenant state and must never fork per-tenant — if anything inside a
-# tenant context ever reaches Steam, it must find the real installation.
-SHARED_LINKS=(
-    .config/kdeglobals .config/gtk-3.0 .config/gtk-4.0 .config/fontconfig
-    .config/Kvantum .icons .themes .local/share/fonts .local/share/icons
-    .steam .local/share/Steam
-    Downloads Music Pictures Videos
-)
 
 active_id() {
     local id
@@ -59,53 +54,69 @@ PY
     echo "${id:-default}"
 }
 
+# Tenant state dir. Per-account app data lives at homes/<id>/.var/app/<app-id>;
+# the dir is NOT a usable $HOME — isolation is the per-app dir swap, nothing
+# resolves $HOME against this path.
 tenant_home() {
-    local id="$1" home
-    home="$STATE_ROOT/homes/$id"
-    if [ ! -d "$home" ]; then
-        mkdir -p "$home/.config" "$home/.local/share"
-        local rel src dst
-        for rel in "${SHARED_LINKS[@]}"; do
-            src="$HOME/$rel"
-            dst="$home/$rel"
-            [ -e "$src" ] || continue
-            mkdir -p "$(dirname "$dst")"
-            ln -sfn "$src" "$dst"
-        done
-    fi
+    local home="$STATE_ROOT/homes/$1"
+    mkdir -p "$home"
     echo "$home"
 }
 
-cmd_run() {
-    [ "${1:-}" = "--" ] && shift
-    [ $# -ge 1 ] || { echo "usage: deck-tenant run [--] <cmd> [args…]" >&2; exit 2; }
-    case "$(basename "$1")${2:+ $(basename "$2")}" in
-        steam*|*" com.valvesoftware.Steam"*)
-            echo "deck-tenant: refusing to run Steam in a virtual home — Steam drives tenant state and must use the real home" >&2
-            exit 1 ;;
-    esac
-    local id home unit
-    id=$(active_id)
-    home=$(tenant_home "$id")
-    unit="deck-tenant-$id-$(basename "$1" | tr -cd 'a-zA-Z0-9')-$$"
-    if command -v systemd-run >/dev/null 2>&1; then
-        exec systemd-run --user --scope --quiet --unit "$unit" \
-            env HOME="$home" DECK_TENANT="$id" DECK_TENANT_REAL_HOME="$HOME" "$@"
-    fi
-    exec env HOME="$home" DECK_TENANT="$id" DECK_TENANT_REAL_HOME="$HOME" "$@"
+# _shared <app-id> <tenant> <rel>… : ensure per-app canonical subpaths inside
+# the tenant's copy of the app dir are symlinks to the ONE shared copy under
+# $STATE_ROOT/shared/<app-id>/<rel>. The first tenant that brings real data
+# at a shared subpath seeds the canonical copy (adoption); a later tenant's
+# real data at that path is set aside as <path>.local rather than merged.
+# Called by generated wrappers before every launch, so fixes here apply
+# without regenerating wrappers.
+cmd__shared() {
+    local app_id="$1" tenant="$2"; shift 2
+    local tenant_dir="$STATE_ROOT/homes/$tenant/.var/app/$app_id"
+    local rel canon dst
+    for rel in "$@"; do
+        canon="$STATE_ROOT/shared/$app_id/$rel"
+        dst="$tenant_dir/$rel"
+        if [ ! -e "$canon" ]; then
+            mkdir -p "$(dirname "$canon")"
+            if [ -e "$dst" ] && [ ! -L "$dst" ]; then
+                mv "$dst" "$canon"
+            else
+                mkdir -p "$canon"
+            fi
+        fi
+        if [ -L "$dst" ]; then
+            [ "$(readlink "$dst")" = "$canon" ] || ln -sfn "$canon" "$dst"
+        elif [ -e "$dst" ]; then
+            echo "deck-tenant: $rel is shared but tenant $tenant has its own copy — keeping it at $dst.local" >&2
+            mv "$dst" "$dst.local"
+            ln -sfn "$canon" "$dst"
+        else
+            mkdir -p "$(dirname "$dst")"
+            ln -sfn "$canon" "$dst"
+        fi
+    done
 }
 
 cmd_register() {
     local app_id="" name="" flags_file=""
+    local -a shared_rels=()
     while [ $# -gt 0 ]; do
         case "$1" in
             --app-id) app_id="$2"; shift 2 ;;
             --name) name="$2"; shift 2 ;;
             --flags-file) flags_file="$2"; shift 2 ;;
+            --shared)
+                case "$2" in
+                    /*|*..*|*$'\t'*|*,*)
+                        echo "deck-tenant: --shared must be a relative path inside the app dir (no '..', tabs, or commas): $2" >&2
+                        exit 2 ;;
+                esac
+                shared_rels+=("${2%/}"); shift 2 ;;
             *) echo "unknown option: $1" >&2; exit 2 ;;
         esac
     done
-    [ -n "$app_id" ] && [ -n "$name" ] || { echo "usage: deck-tenant register --app-id <flatpak-id> --name <Name> [--flags-file <path>]" >&2; exit 2; }
+    [ -n "$app_id" ] && [ -n "$name" ] || { echo "usage: deck-tenant register --app-id <flatpak-id> --name <Name> [--flags-file <path>] [--shared <rel>]…" >&2; exit 2; }
     case "$app_id" in
         com.valvesoftware.Steam|*.Steam)
             echo "deck-tenant: refusing to register Steam — it drives tenant state and must never be tenant-scoped" >&2
@@ -115,7 +126,16 @@ cmd_register() {
     local slug wrapper self
     slug=$(echo "$name" | tr '[:upper:] ' '[:lower:]-')
     wrapper="$HOME/.local/bin/tenant-$slug"
+    mkdir -p "$(dirname "$wrapper")"
     self=$(readlink -f "$0")
+
+    # --shared subpaths: provisioned by `_shared` on every launch (logic lives
+    # here, not in the wrapper, so fixes apply without re-registering).
+    local shared_call=""
+    if [ ${#shared_rels[@]} -gt 0 ]; then
+        shared_call="# Canonical subpaths (mods, instances, …): one copy for every account.
+\"$self\" _shared \"$app_id\" \"\$current\"$(printf ' %q' "${shared_rels[@]}")"
+    fi
 
     # the app itself must exist before we point launchers at it
     if ! flatpak info "$app_id" >/dev/null 2>&1; then
@@ -163,6 +183,7 @@ if [ -e "\$real_dir" ] && [ ! -L "\$real_dir" ]; then
 fi
 mkdir -p "\$tenant_dir"
 ln -sfn "\$tenant_dir" "\$real_dir"
+$shared_call
 
 flags=()
 FLAGS_FILE="${flags_file}"
@@ -191,13 +212,19 @@ $mime
 DESK
     command -v update-desktop-database >/dev/null 2>&1 && update-desktop-database "$HOME/.local/share/applications" || true
 
-    # 3. registry entry (drives the session guard and Steam-shortcut ensure)
+    # 3. registry entry (drives the session guard and Steam-shortcut ensure);
+    # optional 4th column: comma-separated shared subpaths
     mkdir -p "$CONF_DIR"
     touch "$APPS_TSV"
     grep -v "^$app_id	" "$APPS_TSV" > "$APPS_TSV.tmp" || true
-    printf '%s\t%s\t%s\n' "$app_id" "$name" "$wrapper" >> "$APPS_TSV.tmp"
+    if [ ${#shared_rels[@]} -gt 0 ]; then
+        printf '%s\t%s\t%s\t%s\n' "$app_id" "$name" "$wrapper" "$(IFS=,; echo "${shared_rels[*]}")" >> "$APPS_TSV.tmp"
+    else
+        printf '%s\t%s\t%s\n' "$app_id" "$name" "$wrapper" >> "$APPS_TSV.tmp"
+    fi
     mv "$APPS_TSV.tmp" "$APPS_TSV"
     echo "registered $name ($app_id): wrapper=$wrapper"
+    [ ${#shared_rels[@]} -gt 0 ] && echo "shared (canonical) subpaths: ${shared_rels[*]}"
     echo "run deck-tenant-steam-sync (Steam closed) to ensure per-profile Steam shortcuts"
 }
 
@@ -239,11 +266,6 @@ cmd_ps() {
             printf '%-12s %-12s %s\n' "$owner" "$inst" "$app"
         done
     fi
-    systemctl --user list-units --no-legend 'deck-tenant-*' 2>/dev/null \
-        | awk '{print $1}' | grep -E '^deck-tenant-[0-9a-z]+-' | while read -r u; do
-        owner=$(echo "$u" | sed -E 's/^deck-tenant-([0-9a-z]+)-.*/\1/')
-        printf '%-12s %-12s %s\n' "$owner" "scope" "$u"
-    done
 }
 
 cmd_unregister() {
@@ -327,12 +349,12 @@ cmd_setup() {
 
 case "${1:-}" in
     active)   active_id ;;
-    home)     tenant_home "$(active_id)" ;;
-    run)      shift; cmd_run "$@" ;;
+    home)     tenant_home "${2:-$(active_id)}" ;;
     register) shift; cmd_register "$@" ;;
     unregister) shift; cmd_unregister "$@" ;;
     ps)       cmd_ps ;;
     _track)   shift; cmd__track "$@" ;;
+    _shared)  shift; cmd__shared "$@" ;;
     list)     cmd_list ;;
     setup)    cmd_setup ;;
     *) awk 'NR < 2 { next } !/^#/ { exit } { sub(/^# ?/, ""); print }' "$0"; exit 2 ;;
