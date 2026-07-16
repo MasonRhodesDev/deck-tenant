@@ -6,7 +6,16 @@ deck-tenant, ensure a shortcut exists that launches the app's tenant wrapper.
 Entries that launch the app directly (e.g. `flatpak run <app-id>`) are
 rewritten to the wrapper; stored appids are preserved so artwork keeps working.
 
+Grid artwork is synced from a canonical store at
+$XDG_CONFIG_HOME/deck-tenant/art/<appname>/{grid,poster,hero,logo,icon}.<ext>:
+for every shortcut (registered or not) whose appname has an art dir, the files
+are installed into the profile's config/grid/ keyed to the shortcut's CURRENT
+appid — so artwork survives appid churn (shortcuts re-added via Steam's UI get
+fresh appids, orphaning appid-keyed art) and covers newly linked accounts.
+
 Run with Steam closed (it rewrites shortcuts.vdf on exit) unless --dry-run.
+--art-only skips all shortcuts.vdf writes and only installs artwork; grid
+files are safe to add while Steam is running.
 A .bak copy is left next to every modified file. Re-run after adding a Steam
 profile or registering a new app.
 """
@@ -25,6 +34,17 @@ USERDATA = os.environ.get(
     "DECK_TENANT_STEAM_USERDATA", os.path.expanduser("~/.steam/steam/userdata")
 )
 DRY = "--dry-run" in sys.argv
+ART_ONLY = "--art-only" in sys.argv
+
+# canonical role name -> grid filename for a given appid ("p" poster is the
+# 600x900 capsule; bare id is the landscape grid tile)
+ART_ROLES = {
+    "grid": "{id}{ext}",
+    "poster": "{id}p{ext}",
+    "hero": "{id}_hero{ext}",
+    "logo": "{id}_logo{ext}",
+    "icon": "{id}_icon{ext}",
+}
 
 
 def apps():
@@ -34,8 +54,8 @@ def apps():
     out = []
     for line in open(tsv):
         parts = line.rstrip("\n").split("\t")
-        if len(parts) == 3:
-            out.append(tuple(parts))  # (app_id, name, wrapper)
+        if len(parts) >= 3:
+            out.append(tuple(parts[:3]))  # (app_id, name, wrapper); col 4 = shared subpaths
     return out
 
 
@@ -117,18 +137,46 @@ def new_entry(name, wrapper):
     }
 
 
+def sync_art(userdir, shortcuts):
+    """Install canonical art for every shortcut whose appname has an art dir,
+    keyed to the shortcut's current appid. Returns a list of action strings."""
+    actions = []
+    grid = os.path.join(userdir, "config", "grid")
+    for entry in shortcuts.values():
+        if not isinstance(entry, dict):
+            continue
+        name, appid = entry.get("appname", ""), entry.get("appid")
+        src_dir = os.path.join(CONF, "art", name)
+        if not name or not appid or not os.path.isdir(src_dir):
+            continue
+        for fn in sorted(os.listdir(src_dir)):
+            role, ext = os.path.splitext(fn)
+            if role not in ART_ROLES or not ext:
+                continue
+            src = os.path.join(src_dir, fn)
+            dst = os.path.join(grid, ART_ROLES[role].format(id=appid, ext=ext))
+            if os.path.exists(dst) and os.path.getsize(dst) == os.path.getsize(src):
+                continue
+            if not DRY:
+                os.makedirs(grid, exist_ok=True)
+                shutil.copy2(src, dst)
+            actions.append(f"art {name}/{fn} -> {os.path.basename(dst)}")
+    return actions
+
+
 def main():
     registry = apps()
-    if not registry:
+    if not registry and not ART_ONLY:
         print("no apps registered with deck-tenant")
         return 0
     real = "DECK_TENANT_STEAM_USERDATA" not in os.environ
     if (
         not DRY
+        and not ART_ONLY
         and real
         and subprocess.run(["pgrep", "-x", "steam"], capture_output=True).returncode == 0
     ):
-        print("error: close Steam first (it overwrites shortcuts.vdf on exit), or use --dry-run")
+        print("error: close Steam first (it overwrites shortcuts.vdf on exit), or use --dry-run / --art-only")
         return 1
     for userdir in sorted(glob.glob(os.path.join(USERDATA, "*/"))):
         profile = os.path.basename(userdir.rstrip("/"))
@@ -137,6 +185,10 @@ def main():
         path = os.path.join(userdir, "config", "shortcuts.vdf")
         exists = os.path.exists(path)
         shortcuts = parse(open(path, "rb").read()) if exists else {}
+        if ART_ONLY:
+            art = sync_art(userdir, shortcuts)
+            print(f"profile {profile}: {art if art else 'art ok'}")
+            continue
         actions = []
         for app_id, name, wrapper in registry:
             has = False
@@ -160,17 +212,18 @@ def main():
                 free = next(str(n) for n in range(len(shortcuts) + 1) if str(n) not in shortcuts)
                 shortcuts[free] = new_entry(name, wrapper)
                 actions.append(f"create {name}")
-        if not actions:
-            print(f"profile {profile}: ok")
-            continue
         if DRY:
-            print(f"[dry-run] profile {profile}: would {actions}")
+            art = sync_art(userdir, shortcuts)
+            print(f"[dry-run] profile {profile}: would {actions + art}" if actions + art
+                  else f"[dry-run] profile {profile}: ok")
             continue
-        if exists:
-            shutil.copy(path, path + ".bak")
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        open(path, "wb").write(serialize(shortcuts))
-        print(f"profile {profile}: {actions}")
+        if actions:
+            if exists:
+                shutil.copy(path, path + ".bak")
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            open(path, "wb").write(serialize(shortcuts))
+        art = sync_art(userdir, shortcuts)
+        print(f"profile {profile}: {actions + art}" if actions + art else f"profile {profile}: ok")
     return 0
 
 
