@@ -55,9 +55,13 @@ SigLevel = Optional TrustAll
 Server = https://masonrhodesdev.github.io/arch-repo/x86_64
 EOF
 
-# install / upgrade (same command; pacman needs euid 0 → rootless userns)
+# install / upgrade (same command; pacman needs euid 0 → rootless userns).
+# bash/python are host-provided on SteamOS but absent from this pacman root's
+# db, so pacman must be told to assume them.
 unshare -r pacman --config ~/.config/deck-pkgs/pacman.conf \
-    --root $ROOT --dbpath $ROOT/var/lib/pacman -Sy deck-tenant
+    --root $ROOT --dbpath $ROOT/var/lib/pacman \
+    --assume-installed bash --assume-installed python \
+    -Sy deck-tenant
 
 # one-time per-user wiring: PATH snippet, guard units linked+enabled, and
 # ExecStart drop-in overrides pointing the canonical units at this root

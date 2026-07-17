@@ -16,7 +16,9 @@ pkgdesc="Per-app, per-Steam-account data isolation for non-Steam apps on Steam D
 arch=(any)
 url="https://github.com/MasonRhodesDev/deck-tenant"
 license=(MIT)
-install="$pkgname.install"
+# No .install scriptlet: scriptlets run chrooted into --root, and the primary
+# target is a user-level pacman root (~/.local/share/deck-pkgs) with no shell
+# inside — it can only ever fail there. README covers `deck-tenant setup`.
 depends=(bash python)
 optdepends=('flatpak: per-tenant flatpak app registration (host-provided on SteamOS)')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/MasonRhodesDev/deck-tenant/archive/v$pkgver.tar.gz")
