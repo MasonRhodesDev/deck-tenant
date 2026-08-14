@@ -22,7 +22,7 @@ license=(MIT)
 depends=(bash python)
 optdepends=('flatpak: per-tenant flatpak app registration (host-provided on SteamOS)')
 source=("$pkgname-$pkgver.tar.gz::https://github.com/MasonRhodesDev/deck-tenant/archive/v$pkgver.tar.gz")
-sha256sums=('SKIP') # pin on release: updpkgsums
+sha256sums=('21973fd6f704bae39cb55aca18cd086cb6db0721f60bbfd7d52cc455106df14c')
 
 package() {
     cd "$srcdir/$pkgname-$pkgver"
