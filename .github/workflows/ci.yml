@@ -16,7 +16,7 @@ jobs:
   lint:
     name: shellcheck + py_compile
     runs-on: ubuntu-latest
-    container: archlinux:latest
+    container: archlinux:latest@sha256:b0deabeb3d283da2c7f7dbf0eea051b7b2cd0554e0b737cc457fd21683bdcdd1
     steps:
       - name: Install tooling
         run: pacman -Syu --noconfirm --needed git shellcheck python
