@@ -1,7 +1,7 @@
 name: Release
 
-# No COPR for this repo (SteamOS is Arch-based); the reusable workflow's copr
-# job self-skips when COPR_WEBHOOK_URL is not configured.
+# No COPR for this repo (SteamOS is Arch-based); rpm: false skips the COPR
+# job. ARCH_REPO_TOKEN is still required so the tag republishes [mason].
 
 on:
   push:
@@ -12,7 +12,7 @@ permissions:
 
 jobs:
   release:
-    uses: MasonRhodesDev/packaging-workflows/.github/workflows/release.yml@429e647539b02e85ea59b38c441f83a86ee77835
+    uses: MasonRhodesDev/packaging-workflows/.github/workflows/release.yml@43f34aaaa95951ebf71e625de3cf1207e2a259e6
     secrets: inherit
     with:
       rpm: false
